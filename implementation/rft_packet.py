@@ -25,6 +25,7 @@ class rft_packet:
         self.length = udp_payload[2:4]
         self.cid = udp_payload[4:8] 
         self.file_offset = udp_payload[8:16]
+        self.dtr = None
         if(self.flags&DTR == DTR):
             #DTR is set:
             self.dtr = int.from_bytes(udp_payload[16:24],byteorder="big")
@@ -41,6 +42,22 @@ class rft_packet:
                 self.msg = udp_payload[17:].decode("UTF-8")
             self.payload = udp_payload[16:]
         
+    @staticmethod
+    def create_resumption_packet(payload,cid,fileoffset):
+        packet = rft_packet(b'')
+        if type(payload) is bytes : 
+            packet.payload = payload
+        else :
+            packet.payload =  payload.encode("UTF-8")
+        
+        packet.version = b'\x01'
+        packet.flags = RES
+        packet.length = (len(packet.payload)).to_bytes(2,byteorder="big")
+        packet.cid = (cid).to_bytes(4,byteorder="big")
+        packet.file_offset = (fileoffset).to_bytes(8,byteorder="big")
+        return packet
+
+
     @staticmethod
     def create_client_handshake(filename):
         packet = rft_packet(b'')
@@ -67,7 +84,7 @@ class rft_packet:
         
 
     @staticmethod
-    def create_client_hello_ack(cid):
+    def create_client_hello_ack(cid,dtr):
         packet = rft_packet(b'')
         packet.version = b'\x01'
         packet.flags = NEW | ACK
@@ -75,6 +92,9 @@ class rft_packet:
         packet.cid = cid.to_bytes(4,byteorder="big")
         packet.file_offset = (0).to_bytes(8,byteorder="big")
         packet.payload = b''
+        if( dtr is not None):
+            packet.flags = packet.flags | DTR
+            packet.dtr = dtr.to_bytes(8,byteorder="big")
         return packet
 
     @staticmethod
@@ -82,7 +102,9 @@ class rft_packet:
         packet = rft_packet(b'')
         packet.version = b'\x01'
         packet.flags = flags | STC
-        packet.payload = status_code.to_bytes(1, byteorder="big") + message.encode("utf-8")
+        packet.stc = status_code.to_bytes(1, byteorder="big")
+        packet.msg = message
+        packet.payload = status_code.to_bytes(1,byteorder="big") + message.encode("utf-8")
         packet.length = len(packet.payload).to_bytes(2,byteorder="big")
         packet.cid = cid.to_bytes(4,byteorder="big")
         packet.file_offset = (0).to_bytes(8,byteorder="big")
@@ -110,7 +132,7 @@ class rft_packet:
         packet.file_offset = (file_offset).to_bytes(8,byteorder="big")
         if( dtr is not None):
             packet.flags = packet.flags | DTR
-            self.dtr = dtr.to_bytes(8,byteorder="big")
+            packet.dtr = dtr.to_bytes(8,byteorder="big")
         return packet
 
 
@@ -162,7 +184,13 @@ class rft_packet:
 
     def get_status_code(self):
         if(self.isStc()):
-            return (self.stc,self.msg)
+            return self.stc
+        else:
+            return None
+
+    def get_status_msg(self):
+        if(self.isStc()):
+            return self.msg
         else:
             return None
 
@@ -190,7 +218,9 @@ class rft_packet:
             str += "RES "
         str += "\n     Length: {0}\n".format(int.from_bytes(self.length,byteorder="big"))
         str += "     CID: {0}\n".format(int.from_bytes(self.cid,byteorder="big"))
-        str += "     FO: {0}\n".format(int.from_bytes(self.file_offset,byteorder="big"))
+        str += "     FO: {0}\n".format(self.getFileoffset())
+        if(self.isDtr()):
+            str += "     Datarate: {0}\n".format(self.dtr)
         str += "     Payload: {0}".format(self.payload)
         return str
 
