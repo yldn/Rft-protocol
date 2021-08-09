@@ -5,6 +5,7 @@
 #########################################
 
 
+from rft_client import client
 import rft_packet
 import rft_congestion_control
 import socket
@@ -17,6 +18,7 @@ import datetime
 import random
 
 from pathlib import Path
+import os.path
 from signal import signal, SIGINT
 from sys import exit
 from functools import partial
@@ -24,36 +26,40 @@ from functools import partial
 
 data_rate = 0
 # client adress
-client_addr = None
+client_Endpoint = None
 
 #Other acks are ignored since the status code have a higher priority (reset connections)
 #TODO: ONlY wait for connection terminated acks
-def send_status(dst,cid,sock,type,msg,tries=-1,timeout=10):
-    global src_addr
+def send_status(dst,cid,sock,type,msg,tries=3,timeout=10):
+    global client_Endpoint
     status_packet = rft_packet.rft_packet.create_status(cid,type,rft_packet.STC,msg)
+    
     ack_received = False
     socket_poll = select.poll()
     socket_poll.register(sock, select.POLLIN)
     while(tries>=0 and not ack_received):
-
+        # print(status_packet)
         sock.sendto(bytes(status_packet),dst)
 
-        event_list = socket_poll.poll(timeout=timeout)
-    
+        #waiting for client_response
+        event_list = socket_poll.poll(timeout)
         if(not event_list):
             tries -= 1
-            sock.sendto(bytes(sock),dst)
+            sock.sendto(bytes(status_packet),dst)
             
         for fd, event in event_list:
             if(fd == sock.fileno()):
                 data, src = sock.recvfrom(1500)
-                src_addr = src
+                client_Endpoint = src
                 packet = rft_packet.rft_packet(data)
-                #TODO: check if it is the ack for the stc
-                if(not packet.isAck() and not packet.isStc()):
-                    continue
-                else:
+                #check if it is the ack for the stc
+                if( packet.isAck()):
+                    print(packet)
                     ack_received = True
+                    break
+                # if(not packet.isAck() and not packet.isStc()):
+                #     continue
+                
 
     return ack_received
     pass
@@ -71,11 +77,13 @@ def addConnectionID():
 
 
 def complete_handshake(packet,connection_socket,client_addr,tries=3,timeout=10):
-    global data_rate
+    global data_rate 
     #Receive handshake message from client assign client addr 
     if(packet.getlength()>0):
+        print(packet)
 
         file_name = packet.payload
+
         # handle invalid NEW packet from client 
         if(not packet.isNew() or packet.getCID() != 0 or packet.getFileoffset() != 0):
             # print(packet.flags,packet.cid,packet.getFileoffset())
@@ -88,10 +96,10 @@ def complete_handshake(packet,connection_socket,client_addr,tries=3,timeout=10):
         if(packet.isDtr()):
             data_rate=packet.dtr
 
-        if not openfile(file_name,connection_socket) :
+        if not checkfile(file_name) :
             return (None, False, None, None,None)
          
-        file = open(file_name.decode("utf-8"),"rb")
+        # file = open(file_name.decode("utf-8"),"rb")
 
         checksum = hashlib.sha256(open(file_name.decode("utf-8"),"rb").read()).digest()
 
@@ -100,6 +108,7 @@ def complete_handshake(packet,connection_socket,client_addr,tries=3,timeout=10):
         server_packet = rft_packet.rft_packet.create_server_handshake(CID,checksum) 
         # print('calculate checksum of request file : {0} now sending server hello to client : {1}'.format(checksum,client_addr[0]) )
         #Send the packet to the client and wait for a response
+    ######################send to client ###############  
         connection_socket.sendto(bytes(server_packet),client_addr)
 
         #Wait for answer or resend
@@ -123,17 +132,15 @@ def complete_handshake(packet,connection_socket,client_addr,tries=3,timeout=10):
                     #print(rft_packet.rft_packet(data))
 
                     packet = rft_packet.rft_packet(data)
-                    
-                    #Check if src changed
-                    # assert src == client_addr
                     client_addr = src
                     # check the vallidity of client respond
                     if(packet.isStc()):
                         #Any Status code in the handshake is a problem 
-                        code, msg = packet.get_status_code()
+                        code = packet.get_status_code()
+                        msg = packet.get_status_msg()+ "ACK!"
                         status_ack = rft_packet.rft_packet.create_status(CID,code,rft_packet.STC|rft_packet.ACK)
-                        connection_socket.sendto(bytes(status_ack),src_addr)
-                        print("Status code {0} receivedin handshake phase , Invalid {1}".format(code,msg))
+                        connection_socket.sendto(bytes(status_ack),src)
+                        print("Status code {0} received in handshake phase , Invalid {1}".format(code,packet.get_status_msg()))
                         return (None, False, None, None)
 
                     if(not packet.isNew() and not packet.isAck() or not packet.getCID() in CIDs or packet.getFileoffset() != 0): 
@@ -145,15 +152,15 @@ def complete_handshake(packet,connection_socket,client_addr,tries=3,timeout=10):
 
                     if(packet.isDtr()):
                         data_rate=packet.dtr
-                        print(data_rate)
-                        print(packet)
+                        # print(data_rate)
+                        # print(packet)
 
                     handshake_done = True
                     break
                     #Ok, everything is correct 
                     
-
-    return (file, handshake_done, CID,client_addr,socket_poll)
+    print('Handshake "completed"')
+    return (file_name, handshake_done, CID,client_addr,socket_poll)
 
 
 
@@ -162,18 +169,23 @@ def timestamp():
     return datetime.datetime.now().timestamp()
 
 
-def openfile(filename,connection_socket): 
+def openfile(filename): 
     #try to open the file 
     try:
-        file = open(filename.decode("utf-8"),"rb")
-        return True
+        fd = open(filename,"rb")
+        return fd
     #handle file not avaliable
     except FileNotFoundError:
     #File not found send back status to terminate connection
-        send_status(client_addr,0,connection_socket,rft_packet.rft_status_codes.File_not_available,"File not found")
-        print("File not found")
-        print(filename.decode("utf-8"))
-        return  False
+        # send_status(client_Endpoint,0,connection_socket,rft_packet.rft_status_codes.File_not_available,"File not found")
+        # print("File not found:",filename)
+        return  None
+
+def checkfile(filename):
+    # print(filename.decode("utf-8"))
+    return os.path.isfile(filename)
+    
+
 
 def waitingforresponse(connection_socket,socket_poll,timeout=10000): 
     event_list = socket_poll.poll(timeout)
@@ -190,14 +202,18 @@ def resumption_handshake(packet,socket_poll,connection_socket,client_addr,tries=
         # print(packet)
         checksum = packet.payload[:32]
         file_name = packet.payload[32:]
-        if not openfile(file_name,connection_socket) :
-            raise FileNotFoundError("file not found")
+
+        if not checkfile(file_name) :
+            send_status(client_Endpoint,0,connection_socket,rft_packet.rft_status_codes.File_not_available,"File not available")
+            None,False,None, None
+
 
         file = open(file_name.decode("utf-8"),"rb")
         checksumcheck = hashlib.sha256(file.read()).digest()
-        if checksumcheck != checksum:
+        if checksumcheck == checksum:
             #send status code 
-            return
+            send_status(client_Endpoint,0,connection_socket,rft_packet.rft_status_codes.Connection_Terminated,"File complete nothing to transfer")
+            return None,False,None, None
 
         CID = addConnectionID()
         FO = packet.getFileoffset()
@@ -214,49 +230,47 @@ def resumption_handshake(packet,socket_poll,connection_socket,client_addr,tries=
         
         if(packet.isRes()&packet.isAck()):
             handshake_done = True
-            print('resumption handshake done')
-            return file,handshake_done,CID,FO
+            print('Resumption Handshake "completed"')
+            return file_name,handshake_done,CID,FO
         else : 
             return None,False,None, None
  
 def connection_loop(connection_socket):
-    global client_addr
+    global client_Endpoint
     # analyzing incoming data 
     
     socket_poll = select.poll()
     socket_poll.register(connection_socket, select.POLLIN)
 
     data, addr = connection_socket.recvfrom(1500)
-    client_addr = addr
-    print('packet received , parsing...')
+    client_Endpoint = addr
+    print('packet received from: ',client_Endpoint)
     packet = rft_packet.rft_packet(data)
+    print(packet)
 
     if packet.isRes():
     #is a resume handshake packet!
-        try:
-            print(packet)
-            file,file_ok,cid,fileoffset = resumption_handshake(packet,socket_poll,connection_socket,client_addr)
+            # print(packet)
+            filename,file_ok,cid,fileoffset = resumption_handshake(packet,socket_poll,connection_socket,client_Endpoint)
             signal(SIGINT,partial(grace_exithandler,connection_socket,cid))
-            print(file)
+            print(filename)
             print(file_ok)
             print(cid)
             print(fileoffset)
             if(file_ok):
-                dataTransfer(connection_socket,socket_poll,cid,500,file,fileoffset,1000)
+                dataTransfer(connection_socket,socket_poll,cid,100,filename,fileoffset,1000)
+            else:
+                print('something of file went wrong')
 
-        except FileNotFoundError :
-            return
-
-       
 
     if packet.isNew(): 
         #is a new handshake packet! 
-        fd, valid, cid, src_addr, socket_poll = complete_handshake(packet,connection_socket,client_addr)
+        filename, valid, cid, src_addr, socket_poll = complete_handshake(packet,connection_socket,client_Endpoint)
 
         signal(SIGINT,partial(grace_exithandler,connection_socket,cid))
         #Handshake complete 
         if(valid):
-            dataTransfer(connection_socket,socket_poll,cid,500,fd,0,1000)
+            dataTransfer(connection_socket,socket_poll,cid,100,filename,0,1000)
 
     else:
         #invalid connection 
@@ -264,8 +278,11 @@ def connection_loop(connection_socket):
 
 
 # data trasfer loop 
-def dataTransfer(connection_socket,socket_poll,cid,packetsize,fd,file_offset,bufferlength):
+def dataTransfer(connection_socket,socket_poll,cid,packetsize,filename,file_offset,bufferlength):
+    global client_Endpoint
+
     #Start loading data from file and consturct packets
+    fd = open(filename.decode("utf-8"),"rb")
     data_thread = datathread.data_packet_queue(cid,packetsize,fd,file_offset,bufferlength)
     #Data will be read from the file into data_thread.data_packets
     data_thread.start()
@@ -274,68 +291,82 @@ def dataTransfer(connection_socket,socket_poll,cid,packetsize,fd,file_offset,buf
     congestion_control = rft_congestion_control.rft_congestion_control()
     send_and_unacked_packets = dict()
 
-
     file_send = False
     highest_offset_send = 0
     lowest_acked_offset = 0
-    #TODO: congestion/flow control, next file request, connection termination, change file offset from client side...
+    packet_sent = 0 
+    #TODO: congestion/flow control,...
     #Starting to send data and receive acks
+    round= 0
     while(True):
         # flow_control 
         time.sleep(0.2)
-
         # handle file changed  
-
+        if not checkfile(filename):
+            #send statuscode
+            send_status(client_Endpoint,cid,connection_socket,rft_packet.rft_status_codes.File_changed,"File changed")
+            print('File changed , transfer termination')
+            return
         #Send data
         if(len(data_thread.data_packets)>0):
-            
             packet = data_thread.data_packets.pop()
-            
+            # print(packet)
+            # print('sending buffer length: ',len(data_thread.data_packets))
             # handle last packet 
             if packet.isFin():
-                connection_socket.sendto(bytes(packet),client_addr)
+                connection_socket.sendto(bytes(packet),client_Endpoint)
+                file_send = True
                 print('file:{0} send complete'.format(fd))
                 return
 
             # if(flow_control.flow_control(len(bytes(packet))) and congestion_control.congeston_control(len(bytes(packet)))):
-            connection_socket.sendto(bytes(packet),client_addr)
+#########################################send to Client##################################
+            #packet loss simulation
+            if(packet.getFileoffset() == 500 and round == 0 or packet.getFileoffset() == 800 and round == 0 ):
+                packet_sent += 1
+                highest_offset_send = max(packet.getFileoffset(),highest_offset_send)
+                send_and_unacked_packets[packet.getFileoffset()] = (packet, 0, timestamp())
+                continue
+            
+            connection_socket.sendto(bytes(packet),client_Endpoint)
+            packet_sent += 1
             highest_offset_send = max(packet.getFileoffset(),highest_offset_send)
             send_and_unacked_packets[packet.getFileoffset()] = (packet, 0, timestamp()) #0 -- Packet needs to be acked 1 -- Packet in nack range 2 -- timeout packet
+            # print('send and unacked packet: ',send_and_unacked_packets)
             print(int.from_bytes(packet.file_offset,byteorder="big")) #For testing
-
             # else:
             #     data_thread.append(packet)
             loss = 0
             missing = list()
 
             event_list = socket_poll.poll(0)
+            #awaiting for an incoming packet
             for fd, event in event_list:
                 if(fd == connection_socket.fileno()):
                     
-
-
-                    #receiving ACK 
                     data, src = connection_socket.recvfrom(1500)
-                    # assert true 
-                    # src_addr == src
                     packet = rft_packet.rft_packet(data)
-
-
 
                     #TODO: STC, cid,Fin without missing ranges or status codes ...
                     #assertions for connection ID client address
 
-#############################################handle incoming packet#################################
-                    if(src!=client_addr and packet.getCID()!=cid):
-                        print('connection corrupted')
-                        # terminate connection with current session
-                        return
-
-                    if(packet.getCID()==cid):
-                        src_addr = src
+    #############################################handle incoming packet#################################
+                   
+                    print('receive a packet from : ',src)
+                    # print(packet)
+                    # connection migration with current CID
+                    if(src != client_Endpoint):
+                        if(packet.getCID()==cid):
+                            print('connection may lost, reconnecting...')
+                            client_Endpoint = src
+                            continue
+                        else :
+                            print('connection lost , CID mismatch, terminate.')
+                            send_status(client_Endpoint,packet.getCID(),connection_socket,rft_packet.rft_status_codes.Unknown,"connection migration fail")
+                            return
 
                     if(packet.getCID()!=cid):
-                        send_status(src_addr,cid,connection_socket,rft_packet.rft_status_codes.Unknown,"CID not matching")
+                        send_status(client_Endpoint,cid,connection_socket,rft_packet.rft_status_codes.Unknown,"CID not matching")
                         # terminate connection with current session 
                         return
 
@@ -349,65 +380,80 @@ def dataTransfer(connection_socket,socket_poll,cid,packetsize,fd,file_offset,buf
                         if(status == rft_packet.rft_status_codes.File_not_available or status == 4 or status == 5):
                             return
                         if(status == rft_packet.rft_status_codes.Connection_Terminated):
-                            #TODO: ack
-                            print('TODO ACK')
+                            print('ACK STC Term')
                             return
+                        if(status == rft_packet.rft_status_codes.File_changed):
+                            #never happen 
+                            return
+
                         #For any status code or status code acks that were not expected/not defined
-                        send_status(src_addr,cid,connection_socket,rft_packet.rft_status_codes.Unknown,"Unkown status code/Different error")
+                        send_status(client_Endpoint,cid,connection_socket,rft_packet.rft_status_codes.Unknown,"Unkown status code/Different error")
                         return
 
- ######################################################################################################                       
+ ######################################################################################################                      
+                   #handle ack
                     nacks = packet.get_nack_ranges()
-                    
+                    print('get nackrange:',nacks)
                     if(nacks):
                         #TODO: Change to 500->512
                         lowest_acked_offset = nacks[0][0]
+                        print("lowest_acked_offset : ",nacks[0][0])
                         for nack in nacks:
+                            # print(send_and_unacked_packets)
                             i = nack[0]
                             while(i<nack[1]):
+                                # take out the miissing packert from send_and_nack dict 
                                 packet, state, t = send_and_unacked_packets[i]
-                                send_and_unacked_packets[i+500] = (packet,1,timestamp())
+                                # print("get missing packet .... retransfer: ", packet)
+                                send_and_unacked_packets[i] = (packet,1,timestamp())
                                 if(state==0):
                                     missing.append(packet)
                                 elif(state == 2):
                                     loss += 1
-                                i += 500
+                                i += packetsize
                             #send_and_unacked_packets = {not_acked: v for not_acked, v in send_and_unacked_packets.items() if not_acked <= v[0].getFileoffset() }
 
                         loss += len(missing)
                     else:
+                        # no transfer loss 
                         lowest_acked_offset = packet.getFileoffset()
-
-                    send_and_unacked_packets = {not_acked: v for not_acked, v in send_and_unacked_packets.items() if not_acked <= v[0].getFileoffset() }
+                        print("Update lowest acked offset to {0}".format(lowest_acked_offset))
+                    round+=1
+                    send_and_unacked_packets = {not_acked: v for not_acked, v in send_and_unacked_packets.items() if not_acked >=lowest_acked_offset}
+                    # print(send_and_unacked_packets)
 
 #Handle timeout
-#Can be ignored
-            offsets = send_and_unacked_packets.keys()
-            current_time = timestamp()
-            for offset in offsets:
-                if(offset<=lowest_acked_offset):
-                    continue
+            # offsets = send_and_unacked_packets.keys()
+            # current_time = timestamp()
+            # for offset in offsets:
+            #     if(offset<=lowest_acked_offset):
+            #         continue
 
-                packet, state, t = send_and_unacked_packets[offset]
-                if(state == 1 or state == 2):
-                    continue
-                if(current_time-t >= rft_packet.timeout_time):
-                    send_and_unacked_packets[offset] = (packet,2,current_time)
-                    missing.append(packet)
+            #     packet, state, t = send_and_unacked_packets[offset]
+            #     if(state == 1 or state == 2):
+            #         continue
+            #     if(current_time-t >= rft_packet.timeout_time):
+            #         send_and_unacked_packets[offset] = (packet,2,current_time)
+            #         missing.append(packet)
 
 
-            if(missing and missing is not None):
-
-                # data_thread.data_packets.extend(missing.reverse())
-                congestion_control.update_packet_loss(len(missing)/(highest_offset_send-lowest_acked_offset))
+            if missing:
+                # print('missing list :',missing)
+                missing.reverse()
+                # adding to sending buffer 
+                data_thread.data_packets.extend(missing)
+                # congestion_control.update_packet_loss(len(missing) / (highest_offset_send - lowest_acked_offset))
+                # print(data_thread.data_packets)
+        # only receiveing data 
         else:
-            
             print('something went wrong')
             return
 
+
+
 def grace_exithandler(socket,CID,signal_received, frame):
     print('SIGINT or CTRL-C detected. Exiting gracefully')
-    termConnection(socket,CID,client_addr)
+    termConnection(socket,CID,client_Endpoint)
 
 def termConnection(socket,CID,address):
     s = 'connection terminated!'
@@ -425,8 +471,6 @@ def serverDown():
 def grave_termServer(signal_received, frame):
     serverDown()
     
-
-
 def server(port,p,q):
     #Socket creation for IPv4/IPv6
     try:
@@ -438,8 +482,8 @@ def server(port,p,q):
     except Exception:
         print("Something went wrong while trying to create the sockets")
         return
-    
-    print("Listining on Port {0} and {1}".format(port,port))
+
+    print("Listening on Port {0} ".format(port))
 
     #Create Poll object
     socket_poll = select.poll()

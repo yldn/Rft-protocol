@@ -13,38 +13,50 @@ class data_packet_queue(threading.Thread):
         self.file_offset = file_offset
         self.cid = cid
         threading.Thread.__init__(self)
-    def stop():
+    def stop(self):
         self.stop = True
 
-    def append(packet):
-        pass
-        
+    # def append(packet):
+    #     pass
+
+    def add_missingpacket(self,packet):
+        print('missing packet is readded tothe sending buffer: ',packet)
+        self.data_packets.append(packet)   
 
     def run(self):
         while(not self.stop):
             #Does not really make it only use buffersize packts
             #Packts can get re-added because of loss, thus >buffersize
             if(len(self.data_packets)<self.buffersize):
-                #read from current file and consturct a packet 
+                #read from current fileoffset and consturct a packet 
                 self.file.seek(self.file_offset)
                 new_data = self.file.read(self.size)
+
+                #edge condition 
+                if len(new_data) == 0:
+                    print("NO MORE FRESH DATA LEFT TO READ")
+                    self.stop = True
+                    self.finalMaxFileOffset = self.file_offset
+
                 # read last packet
                 if(len(new_data)<self.size):
-                    self.stop = True
                     new_packet = rft_packet.rft_packet.create_data_packet(self.cid,new_data,self.file_offset,rft_packet.FIN)
-
+                    self.file_offset += self.size
+                    print('Loading finished... ',self.file_offset)
+                    self.data_packets.appendleft(new_packet)
+                    self.stop = True
                 else:
-                    #TODO: check edge-case filesize = size*x x {1,...g}
                     new_packet = rft_packet.rft_packet.create_data_packet(self.cid,new_data,self.file_offset)
                     self.file_offset += self.size
-                    print('dataloaded : ',self.file_offset)
-                #Add to the left side of the queue
-                self.data_packets.appendleft(new_packet)
+                    print('data loading... ',self.file_offset)
+                    #Add to the left side of the queue
+                    self.data_packets.appendleft(new_packet)
 
 
 class data_write_queue():
     
     def __init__(self, file,fileOffset):
+        # receive buffer 
         self.queue = collections.deque()
         self.payload_dict = dict()
         self.file = file
@@ -68,7 +80,7 @@ class data_write_queue():
             res +=(str(int.from_bytes( k[0:8], byteorder="big"))+ " "+str( int.from_bytes( k[8:16], byteorder="big"))) +"\n"
         return res
     def get_missing_ranges(self):
-
+        # print('get missing range :', self.payload_dict)
         key_values = list(self.payload_dict)
         if (len(key_values) == 0):
             return b''
@@ -94,29 +106,47 @@ class data_write_queue():
             res += r[0].to_bytes(8, byteorder="big") + r[1].to_bytes(8, byteorder="big")
         return res
 
+    def corp_missing_ranges(self):
+        missingrange = self.get_missing_ranges()
+        if(len(missingrange)>16):
+            res = missingrange[:8]+missingrange[-8:]
+            print('nack payload:',res)
+            return res
+        else: return missingrange
+        
+        
 
     def write(self):
+        # finish writing 
         if (len(self.queue) == 0 and self.fin):
             self.run = False
-
+            return
+        # load each received packet to dic 
         while (len(self.queue) > 0):
+            # print('payload dict length:',len(self.payload_dict))
             packet = self.queue.popleft()
             pos = packet.getFileoffset()
-            if (self.payload_dict.get(self.file_position, None) is None):
+
+            if (self.payload_dict.get(pos, None) is None):
                 if(self.file_position<=pos):
                     self.payload_dict[pos] = packet.payload
-
-
+        
+        # print(self.payload_dict)
+        # check if the request file_position has valid packet
         while(len(self.payload_dict)>0):
             res = self.payload_dict.pop(self.file_position, None)
-            a = list(self.payload_dict.keys())
-            a.sort()
-            # print(a)
+            # a = list(self.payload_dict.keys())
+            # a.sort()
             if(res is None):
+                # requested packet is not received yet 
                 break
             if (res is not None):
                 self.file.write(res)
+                # print("File position {0} written, new position {1}".format(self.file_position,self.file_position+len(res)))
+                # print('write int to file: ',self.file_position)
                 self.file_position += len(res)
+
+        
         return self.file_position
 
 

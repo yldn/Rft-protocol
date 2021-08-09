@@ -79,7 +79,7 @@ class rft_packet:
         packet.cid = cid.to_bytes(4,byteorder="big")
         packet.file_offset = (0).to_bytes(8,byteorder="big")
         packet.payload = payload
-        print(int.from_bytes(packet.length,byteorder="little"),len(payload))
+        # print(int.from_bytes(packet.length,byteorder="little"),len(payload))
         return packet
         
 
@@ -153,12 +153,13 @@ class rft_packet:
         start = 0
         nack_ranges_list = list()
         while(True):
-            length -= 16
+            
             if(length<=0):
                 return nack_ranges_list
-            nack_ranges_list.append((int.from_bytes(self.payload[start:8],"big",signed=False),int.from_bytes(self.payload[start+8:start+16],"big",signed=False)))
+            nack_ranges_list.append((int.from_bytes(self.payload[start:start+8],"big",signed=False),int.from_bytes(self.payload[start+8:start+16],"big",signed=False)))
+            length -= 16
             start += 16
-        return nack_ranges_list
+        # return nack_ranges_list
 
 
     def isAck(self):
@@ -184,7 +185,7 @@ class rft_packet:
 
     def get_status_code(self):
         if(self.isStc()):
-            return self.stc
+            return int.from_bytes(self.stc,byteorder = "big")
         else:
             return None
 
@@ -219,8 +220,10 @@ class rft_packet:
         str += "\n     Length: {0}\n".format(int.from_bytes(self.length,byteorder="big"))
         str += "     CID: {0}\n".format(int.from_bytes(self.cid,byteorder="big"))
         str += "     FO: {0}\n".format(self.getFileoffset())
-        if(self.isDtr()):
+        if self.isDtr():
             str += "     Datarate: {0}\n".format(self.dtr)
+
+        
         str += "     Payload: {0}".format(self.payload)
         return str
 
