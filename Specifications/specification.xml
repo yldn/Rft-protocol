@@ -1,0 +1,652 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!DOCTYPE rfc SYSTEM "rfc2629-xhtml.ent">
+<?xml-stylesheet type='text/xsl' href='rfc2629.xslt' ?>
+
+<rfc
+      xmlns:xi="http://www.w3.org/2001/XInclude"
+      category="info"
+      docName="rft-protocol-draft-03"
+      ipr="none"
+      obsoletes=""
+      updates=""
+      submissionType="independent"
+      xml:lang="en"
+      version="3">
+
+ <front>
+
+
+   <title abbrev="RFT-Protocol">YeSS Robust File Transfer Protocol</title>
+    <seriesInfo name="ProtocolDesign-Draft" value="draft-03"/>
+
+   <author fullname="Patrick Sabanic" initials="P.S." role="editor" surname="Sabanic"></author>
+   <author fullname="Liudongnan Yang" initials="L.Y" role="editor" surname="Liudongnan"></author>
+   <author fullname="Zeynep Sonkaya" initials="Z.S" role="editor" surname="Sonkaya"></author>
+
+    <date year="2021" month="May" day="25"/>
+
+
+
+   <abstract>
+      <t>This documents defines the details of the Robust File Transfer (RFT) protocol, which is a UDP based File transfer protocol.</t>
+    </abstract>
+  </front>
+  <middle>
+          <section>
+            <name>Introduction</name>
+            <t>RFT is a simple file transfer protocol to provide one client with data from a remote server over the internet.
+            This server is limited to one client at a time, which will be served all files requested before the sender becomes available again.</t>
+          
+          </section>
+
+          <section>
+            <name>Design Requirements</name>
+            <t>The RFT protocol tries to fulfil following requirements:</t>
+              <ul>
+                <li>Point-to-point operation</li>
+                <li>MUST be UDP-based</li>
+                <li>MUST not rely on other protocols on top of UDP</li>
+                <li>Must not use another protocol on top of itself</li>
+                <li>MUST be able to recover from connection drops</li>
+                <li>MUST support Connection Migration</li>
+                <li>MUST be "reliable"</li>
+                <li>MUST support flow control</li>
+                <li>MUST realize a minimal congestion control</li>
+                <li>MUST support checksums for the received files</li>
+                
+              </ul>
+
+          </section>
+
+          <section>
+            <name>Functional Specifications</name>
+            <section>
+               <name>Terminology</name>
+            <t>   Yes-packet: A complete processable unit of YeSS RFT that can be encapsulated in a UDP datagram.  </t>
+             </section>
+
+
+              <section>
+                <name>RFT Header Format</name>
+
+                <section>
+                  <name>Client Header</name>
+                  <figure anchor="C_HEADER" title="Client Header">
+                    <artwork align="center" name="Client Header" type="" alt=""><![CDATA[
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|Re.|C|F|R|M|A|H|        Connection ID          |  Flow Control
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     Window     |                Sequence Number                         
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+                |   Checksum    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+]]>
+                    </artwork>
+                  </figure>
+
+                  <dl newline="true" spacing="normal" indent="8">
+                    <dt>Flags: 8 bit</dt>
+                      <dd>                       
+
+                        <t>H: Hello Flag <br/>
+                        The Hello Flag signifies the intention to establish a connection and is used in the initial handshake.
+                        </t>
+                        <t>A: Acknowledgement Flag <br/>
+                        If the Acknowledgement Flag is set, the Sequence Number field contains the value of the next sequence number the sender of the segment is expecting to receive.
+                        Otherwise the Sequence Number field is handled as a Negative Acknowledgement.
+                        </t>
+                        <t>M: Missing Flag <br/>
+                        The Missing Flag is only set together with the Acknowledgement Flag and indicates that only the given Sequence Number is being expected from the receiver.
+                        </t>
+                        <t>R: Repeat Flag <br/>
+                        The Repeat Flag is set to indicate that no Yes-packet has been received with the Sequence Number included in the header or any subsequent Sequence Number of the one in the header.
+                        </t> 
+                        <t>F: File Request Flag <br/>
+                        The File request flag is set if the client wants to make a file request.
+                        </t>
+                        <t>C: Checksum Flag <br/>
+                        The C flag  is set when the result of the checksum comparison is in the header.
+                        </t>                                
+                        <t>Re.: Reserved<br/>
+                        The first 2 bit of the header are reserved and MUST be set to 0.
+                        </t>                      
+                      </dd>
+                    <dt>Connection ID: 16 bit</dt>
+                    <dd><br />The Connection ID chosen by the server identifying the connection.</dd>
+                    <dt>Flow Control Window: 16 bit</dt>
+                    <dd><br />The Flow Control Window specified by the client is the number of Yes-packets the client is able to accept.</dd>
+                    <dt>Sequence Number: 32 bit</dt>
+                    <dd><br />The Sequence Number indicating the next sequence number the sender of the Yes-packet is expecting to receive.</dd>
+                    <dt>Checksum: 8 bit</dt>
+                    <dd><br />CRC8 checksum over the header with the checksum field being 0.</dd>
+                  </dl>
+                </section>
+
+
+                <section>
+                <name>Client Subheaders</name>
+                <t>In case the client set the F flag or the A flag alone,the header is followed by a subheader</t>
+                <section>
+                <name>File Header</name>
+                                  <figure anchor="F_HEADER" title="File Header">
+                    <artwork align="center" name="File Header" type="" alt=""><![CDATA[
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|             Length            |   Reserved  |N|  File Path
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+]]>
+                    </artwork>
+                  </figure>
+                  <t>This header is used for the File request of the client. The client appends the header after the Client Header.
+                  The length is the length of the filepath in data octets that has been send with the Client Subheader File Header.
+                  The N flag is set if a further File Header follows after the current one.
+                  The File Path is the path of the file the client wants to request.
+                  </t>
+                </section>
+
+
+                <section>
+                <name>Negative Acknowledgement Header</name>
+                                  <figure anchor="N_HEADER" title="NACK Header">
+                    <artwork align="center" name="NACK Header" type="" alt=""><![CDATA[
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|   Seq. Num.   |             Sequence Numbers
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+]]>
+                    </artwork>
+                  </figure>
+                  <t>If more than one sequence Number is needed in a NACK to Negative acknowledge more than one Yes-packet, the client appends a NACK header to the Client Header.
+                  The Sequence Number Count (Seq. Num.) is set to the number of following Sequence Numbers.
+                  In case the number is 0 no Sequence Number follows and only the Sequence Number in the Client Header is used for the NACK.
+                  The Sequence Numbers are appended after the Sequence Number Count.
+                  </t>
+
+                </section>
+
+
+                </section>
+
+
+                <section>
+                  <name>Data Header</name>
+                  <figure anchor="DATA_HEADER" title="Data Header" align="center">
+                    <artwork align="center" name="Data Header" type="" alt=""><![CDATA[
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Sequence Number                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Total Length          |        Connection ID          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Res. |C|E|N|H|   File ID     |          Checksum             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+]]>
+                    </artwork>
+                  </figure>
+
+                  <dl newline="true" spacing="normal" indent="8">
+                    <dt>Sequence Number: 32 bit</dt>
+                    <dd><br />The Sequence Number of the current packet.</dd>
+                    <dt>Total Length: 16 bit</dt>
+                    <dd><br />The length of the Yes-packet including the header information.</dd>
+                    <dt>Flags: 8 bit</dt>
+                    <dd>
+
+                      <t>N: File not found <br/>
+                        Set in case the file the client requested was not found.
+                      </t>
+
+                      <t>E: End of file<br/>
+                        Set on the Yes-packet with the last part of the file.
+                      </t>
+
+                      <t>C: Checksum <br/>
+                        Set in the Yes-packet containing the MD5 checksum as payload, which is send for each file.
+                      </t>
+                      <t>H: Server Hello <br/>
+                        Set in the Hello Message from the Server.
+                      </t>
+                      <t>Reserved: 4 bit<br/>
+                        First 5 flag entries are reserved for future use and MUST be set to 0.
+                      </t>
+                    </dd>
+                    <dt>File ID: 8 bit</dt>
+                    <dd><br />The File ID is used to identify which file the data send belongs to and is based on the order the files were requested in.</dd>
+                    <dt>Checksum: 16 bit</dt>
+                    <dd><br />CRC16 over header and payload with the Checksum field being 0. </dd>
+
+                  </dl>
+
+
+
+                </section>
+
+
+              </section>
+              <section>
+              <name>Sequence Numbers</name>
+                <t>In our fundamental design in a RFT connection, the octet of data sent from the server to the client has a sequence number. Every octet is sequenced by the server, so client can acknowledge each of them.
+                  The Sequence number in the packet from the Server side is the sequenced data number in the packet.
+                  But the sequence number in the packet from the Client side is the acknowledgment sequence number corresponding to the client sequence numbers.
+                  The Acknowledgement mechanism is not fully cumulative. If the M flag is not set, an acknowledgment of sequence number X by the client indicates that all octets up to but not including X have been received.
+                  Else if the M flag is set, an acknowledgment of sequence number X by the client indicates that not all octets up to X have yet been received but octets just before X have been received.
+                  This mechanism allows the Yes-packet received by the client after some missing Yes-packets to be still usable.
+                  The Numbering of octets within a Yes-packet is that the first data octet immediately following the header is the lowest numbered, and the following octets are numbered consecutively.</t>
+                <t>Actual sequence number space is finite and ranges from 0 to 2**32 -1. All arithmetic dealing with sequence numbers must be performed modulo 2**32.</t>
+                <t>Sequence number comparisons that the server MUST perform:</t>
+                <ol type="(%c)">
+                <li> Determining if an acknowledgement sequence number refers to some sequence number sent but not yet acknowledged and if this ack. seq. num. reported before with an NACK.</li>
+                <li> Determining if all sequence numbers occupied by a Yes-packet have been acknowledged to remove the Yes-packet from a retransmission queue.</li>
+                <li> Determining if NACK message sequence numbers are included in missing Yes-packet list on the server side and retransmitted again recently.</li>
+                <li> Determining if a ACK message has the R flag set to rearrange the transmission queue.</li>
+                <li> Determining if M flag is removed and the ack sequence number occupied by a Yes-packet is greater than the Yes-packets reported missing to remove the Yes-packet from a missing list and missing-resend queue.</li>
+                </ol>
+                <dl newline="true">
+                <dt>The following comparisons are needed to process the acknowledgments by the server:</dt>
+                <dd>
+                <ul>
+                  <li> MISS_LIST = unacknowledged sequence numbers list</li>
+
+                   <li>SND.NXT = next sequence number to be sent according to the order</li>
+
+                   <li>DAT.SEQ = first sequence number of a Yes-packet</li>
+
+                   <li>DAT.ACK = acknowledgement sequence number of a Yes-packet sent by the client</li>
+
+                   <li>DAT.LEN = the number of octets occupied by the data in the Yes-packet</li>
+
+                   <li>DAT.SEQ + DAT.LEN-1 = last sequence number of a Yes-packet</li>
+  </ul>
+                   <t>A new acknowledgment (called an "acceptable ack"), is one for which the inequality below holds:</t>
+  <ul>
+                   <li>DAT.ACK  subset of  MISS_LIST or</li>
+
+                   <li>DAT.ACK &lt;= SND.NXT</li>
+                </ul>
+                </dd>
+                </dl>
+                  <t>A Yes-packet on the retransmission queue is fully acknowledged if the sum of its sequence number and length is less or equal than the acknowledgment value in the incoming Yes-packet.</t>
+
+                  <dl newline="true">
+                  <dt>The following comparisons are needed to process the sequence number by the client:</dt>
+                  <dd>
+                  <ul>
+                  <li> RCV.LOWEST = sequence number of the missing Yes-packet with the lowest number, and the left or lower edge of the receive window.</li>
+                  <li>RCV.LOWEST+RCV.WND-1 = last sequence number expected on an incoming Yes-packet, and is the right or upper edge of the receive window</li>
+                  <li>DAT.SEQ = first sequence number occupied by the incoming Yes-packet</li>
+                  <li>DAT.SEQ+DAT.LEN-1 = last sequence number occupied by the incoming Yes-packet</li>
+                  </ul>
+                    <t>A Yes-packet is judged to occupy a portion of valid receive sequence space if</t>
+                       <ul>
+                      <li> RCV.LOWEST &lt;= DAT.SEQ+DAT.LEN-1 &lt; RCV.LOWEST+ RCV.WND</li>
+                           </ul>
+                  <t>Note that when the receive window is zero, no Yes-packets should be acceptable since there is no Yes-packet sent by the server with data length 0.</t>
+
+                  </dd>
+                  </dl>
+                  <t>Initial Sequence Number Selection</t>
+
+                  <t>For each connection there is one server sequence number only.
+                  The initial server sequence number (ISS) is chosen by the server, and as a default is 0.
+                  Connection establishment includes the process of clients learning the ISS.
+                  By this connection establishment, the client can set its expected ACK sequence number.</t>
+
+
+              </section>
+              <!--End of sequence number-->
+              <section>
+              <name>Connection ID</name>
+                <t>  A connection is defined by the Connection ID set by the server.
+                  This protocol places no restriction on a particular connection being used over and over again.
+                  New instances of a connection can be established by using assigned connection ID on the earlier connection establishment.
+                   Even if an initial handshake is not fully completed, there would be no problems since a new fresh Connection ID would be assigned.</t>
+                <t>The Server MUST never reuse the same connection IDs that are already in use. So the Server must have a list of in use Connection IDs. </t>
+
+                <t>Quiet Time</t>
+                 <t>Connection ID is used to differentiate an old Yes-packet(delayed Yes-packet) with a new Yes-packet.
+                  To be sure that a server does not create a connection ID, which may be used by an old connection remaining in the network,
+                   the server must keep quiet for a maximum Yes-packet lifetime (MDL) before assigning any connection ID
+                   upon starting up or recovering from a crash that lead to lose of the list of Connection IDs in use.
+                   For this specification the MDL is taken to be 2 minutes.
+                   This is an engineering choice, and may be changed if experience indicates it is desirable to do so.
+                  If the crash does not lead CID-in-use-list loss, the waiting is not necessary.</t>
+
+              </section>
+              <!--End of Connection ID-->
+
+
+              <section>
+                <name>Connection Establishing</name>
+                <t>The connection between client and server is established via a three-way handshake initiated by the client.</t>
+                <ol group="handshake">
+                  <li>Client ----- Hello(SEQ=0,CID=0) ----> Server</li>
+                </ol>  
+                
+                  <t>
+                  </t>
+                
+                <ol group="handshake">
+                  <li>Server ---- Hello(SEQ=0,CID=X) ----> Client</li>
+                </ol>
+                  <t>
+                  </t>
+
+
+                <ol group="handshake">
+                  <li>Client ---- ACK(SEQ=0,CID=X) ----> Server</li>
+                  
+                </ol>
+                  <t>
+                  The first packet is send by the client to initialize the communication. 
+                  
+                  </t>
+                  <dl newline="true">
+                  <dt>The Header is set as following:</dt>
+                  <dd>
+                  <ul>
+                    <li>The only set flag is H.</li>
+                    <li>The Connection ID is not yet set by the server and must be set to 0x0000.</li>
+                    <li>The Sequence Number is set to 0x00000000.</li>
+                  </ul>
+                  </dd>
+                  </dl>
+                  <dl newline="true">
+                  <dt>The Server will then respond with a Hello:</dt>
+                  <dd>
+                  <ul>
+                    <li>The only set flag is H</li>
+                    <li>The Sequence Number is still set to 0x00000000 as ISN default</li>
+                    <li>The Total Length is set to 0x000C, which is the minimal Server side Yes-Packet length.</li>
+                    <li>The Connection ID is set to the Connection ID the server decided on.</li>
+                    <li>File ID is set to 0x00</li>
+                  </ul>
+                  </dd>
+                  </dl>
+                  <dl newline="true">
+                  <dt>The final exchange of the Handshake is done by the Client:</dt>
+                  <dd>
+                  <ul>
+                    <li>The A flag must be set</li>
+                    <li>The Sequence Number is still set to 0x00000000 if server used the default ISN. Else it MUST match the sequence number  received in the Server Hello. </li>
+                    <li>The Connection ID is set to the one received in the Server Hello</li>
+                  </ul>
+                  </dd>
+                  </dl>                  
+              </section>
+              <!-- End of Connection Start-->
+              <section>
+                <name>File Request</name>
+                <t>
+                  The File Request is a essential part of the protocol. The File Request can be used right in the last handshake packet or send after it.
+                  Another possibility for the client to send a file request is after the last file has been transmitted.
+                  To indicate a file request has been included in the current Yes-Packet, the client sets the F flag in the client header.
+                  In such a case the client header is then followed by the File Header.
+                  The File Header is set to the appropriate values: 
+
+                </t>
+                <ul>
+                <li>Length is set to the length of the string of the file path.</li>
+                <li>In case multiple files are to be requested the N flag is set, for all but the last file </li>
+                <li>The next File Header is directly after the current one.</li>
+                </ul>
+                
+                <t>   
+                After the server receives a Client Header packet with the F flag set,it will proceed and check if all files are available, assuming the File Request was send
+                at the appropriate time in the connection. The server MUST ignore all File Requests that are not sent with the last handshake packet or directly after the
+                handshake or before the last file of priorly requested has been fully transmitted.
+                </t>
+                <t>
+                In case a file is not available, the server will send a Yes-Packet with the N flag set to indicate that the file was not found with and the appropriate file ID .
+                And continues with the next file if another one was requested.
+                </t>
+
+              </section>
+               <!-- File request-->
+
+              <section>
+                <name>Data Transfer</name>
+                <t> 
+                In the data transfer phase the actual data transmission starts. The congestion [<xref target="congestion_con"/>] and flow control [<xref target="flow_con"/>]
+                mechanisms are used in this phase.
+                </t>
+                <t>
+                After the client has send a valid file request to the server, the server will send the files to the client in the order they have been specified in.
+                The data is sent as payload of a data header and after the end of each file the server send a MD5 checksum with the C and E flag set. 
+                The client will then eiter answer with the C and A flag set or just the C flag in case the checksum does not match.<br/>
+                There are four possible outcomes for each data packet send by the server:
+                </t>
+                <ul>
+                  <li>
+                  
+                  <t>The packet arrives at the client and the client response with a ack, which arrives at the server
+                  </t>
+                    <ol>
+                      <li>Server ---- Data(SEQ=DAT.SEQ) ----> Client</li>
+                      <li>Client ----  ACK(SEQ=DAT.SEQ+DAT.LEN) ----> Server</li>
+                    </ol>
+                  
+                  </li>
+                  <li>
+                  <t>The checksum of the packet is not valid.
+                  </t>
+                    <ol>
+                      <li>Server ---- Data(SEQ=DAT.SEQ) ----> Client</li>
+                      <li>Client ---- NACK(SEQ=DAT.SEQ)     ----> Server</li>
+                    </ol>
+                  
+                  </li>
+                  <li>
+                  <t>The packet does not arrive at the client and a higher sequence number has been received.
+                  </t>
+                    <ol>
+                      <li>Server ---- / ----> Client</li>
+                      <li>Server ---- Data(SEQ=DAT.SEQ+x) ----> Client</li>
+                      <li>Client ---- NACK(SEQ=DAT.SEQ)     ----> Server</li>
+                      <li>Client ---- ACK(SEQ=DAT.SEQ+x,M)     ----> Server</li>
+                    </ol>
+                  
+                  </li>
+                  <li>
+                  <t>The packet does not arrive and no further packets arrive
+                  </t>
+                    <ol>
+                      <li>Server ---- Data(SEQ=DAT.SEQ) ----> Client</li>
+                      <li>Client ---- NACK(SEQ=DAT.SEQ) ----> Server</li>
+                    </ol>
+                  
+                  </li>
+
+
+                </ul>
+                <t>
+                In the first scenario the data message has been successfully acknowledged and the server does not need to retransmit the data.
+                This makes the sequence number used assignable again.
+                
+                </t>
+
+                <t> 
+                In the second scenario the data message can not be verified via the checksum and the client sends a NACK back causing the server to retransmit
+                the packet. 
+
+
+                </t>
+
+                <t> 
+                In the third scenario the data message did not arrive in order or one of them did get lost. In this case the client sends out a NACK for the missing one.
+                The client should allow for some reordering of the packets at arrival and should not send a NACK immediately after receiving a out of order data message.
+
+
+                </t>
+
+                <t>
+                In the fourth scenario the data message gets lost and no further messages arrive. This might indicate a connection loss of the server 
+                [<xref target="drop"/>] but it can also happen in case of the last data message for a file being lost. In this case the client sends a
+                NACK for the missing message after a appropriate timeout. 
+
+
+                </t>
+
+
+              
+              </section>
+               <!-- End of Data Transfer-->  
+
+              <section anchor="drop">
+                <name>Connection Drops</name>
+                <section>
+                <name>Client Connection Loss</name>
+                  <t> This case occurs when the client connection drops or the client migrates. </t>
+                  <t>This is noticed by the client when the last packet of the expected files is not received and waiting timeout occurs. This timeout is set to be 3 minutes.</t>
+                 <t> In the case of a case of a Connection Drop, the Client initiates the connection reestablishment by sending a Yes-packet
+                  with a set R flag and acknowledgment sequence number set
+                  as last expected sequence number without considering the missing yes-packets if they exist.
+                   Also a NACK with all missing packets sequence numbers and R flag set is sent simultaneously. So that server can resend those again without waiting timeouts of already resented ones.  </t>
+
+                  <t>After the client connection drop, the client periodically sends the reestablishment yes-packet described above,
+                  until it receives the data packet with the sequence packet given in the reestablishment yes-packet.
+                  After this desired data yes-packet is received, the R flag in the client yes-packet is not set anymore.
+                  The periodic sending of reestablishment yes-packets MUST also stop after a timeout which is set as 1 minute.
+                  This timeout can be revised. With this timeout, the client gives up on downloading the file(s).</t>
+                <t>When the server receives a yes-packet with the R flag set, it updates its transmission queue to start with the included sequence number and start transmission again. Also if the M flag is set, it expects the NACK and resend all the missing yes-packets.</t>
+                </section>
+                <section>
+                <name>Server Connection Loss</name>
+                <t> This case occurs when server connection drops. </t>
+                  <t>This is noticed by the client when the sent client yes-packets are replied with ICMP Destination Unreachable message. As long as the client is running, it sends client yes-packets as to acknowledge the prior packets or to recover from potential client connection drop. So client always notices the server connection drop.</t>
+                  <t>Receiving ICMP message results with client's giving up to download.</t>
+                
+                </section>
+
+                
+              </section>
+               <!-- End of Connection Drop-->  
+
+
+
+              <section>
+                <name>End of Connection</name>
+                <t>
+                 Once the last file requested by the client has been acknowledged, the client can either send a further request or the connection ends.
+                 The request must be included in the last Acknowledgement the client sends.
+                 If the client does not send a request in the last Acknowledgement the server will close the connection and the file transfer has finished.
+                </t>
+
+                <t>
+               The server will mark the Yes-packet as Last Packet by setting the E flag in the data header. Also in this packet, C flag would be set and the MD5 Checksum would be included as the payload.  
+                  It will be used by the client to check the validity of the whole file.</t>
+                  <t> The Client would send the result of this checksum by sending a yes-packet with the C flag set. If the checksum of the received data is not valid, the A flag in this packet is not set to ask for retransmission. Else A is set, the file is good.
+
+                </t>
+              </section>
+               <!-- End of End of Connection-->              
+              <section anchor="flow_con">
+                <name>Flow Control</name>
+                <t>
+                The flow control of RFT uses a sliding window. The size of the window is variable and can be set by the client with every NACK or ACK by setting the
+                appropriate Flow Control Window (fcwd) Filed to a value between 0 and 65535.
+                The server moves the fcwd forward whenever the currently lowest sequence number in use is acknowledged.
+
+                </t>
+
+              </section>
+               <!-- End of Flow Control-->
+              <section anchor="congestion_con">
+                <name>Congestion Control</name>
+                <t>The congestion control of RFT has four phases. The basis for the congestion control is the RTT measured by the time between the data message and the 
+                corresponding ACK. All thresholds are suggestions and might need to be changes to increase performance or stability.</t>
+                <section>
+                <name>Initial Phase</name>
+                <t>At the start of the congestion control the Initial Phase takes place. In the Initial Phase the server sends each data message after it received the
+                ACK for the previous one. This is done for the first 10 messages. From those messages the RTT is taken for the current base RTT. 
+                </t>
+                
+                </section>
+                <section>
+                <name>Startup Phase</name>
+                <t>
+                After the initial phase the transfer rate is increased. This is done by increasing the send messages per RTT by one for each ACK received.
+                To find the maximum, the average RTT is measured over the last 10 messages send. When this average is over a threshold (base RTT*1.1) compared to the base RTT measured
+                in the Initial Phase, the messages per RTT are decreased until the average is within the threshold again by decreasing the messages pre RTT by one per RTT.
+                
+                </t>
+                
+                </section>
+                <section>
+                <name>Sending Phase</name>
+                <t>
+                After the Startup Phase has determent how much can be send, the Sending Phase continuous sending with the same rate.
+                In this phase the messages per RTT are increased if the RTT reaches a threshold(base RTT*1.05) above the base RTT and decreased if the RTT reaches a threshold(base RTT*0.95) below 
+                the base RTT.
+                In case there is a major change in RTT, in form of a lower (base RTT*0.7) or upper bound (base RTT*1.3) to the base RTT, the Initial Phase is re-entered.
+                Every 20 seconds the Sending Phase is followed by the RTT Measuring Phase independent of the changes in RTT.
+                </t>
+                </section>
+                
+                <section>
+                <name>RTT Measuring Phase</name>
+                <t>In this phase the base RTT is re-measured. This is done in the same way as it was done in the Initial Phase. One message is send and the server waits for the ACK from the client and
+                the average is the take over 10 message send and receive pairs.
+                This new base RTT can then be compared with the old baseline. If the RTT is different beyond a certain threshold (base RTT &gt; old RTT*1.3 or base RTT &lt; old RTT*0.7 ) the Startup Phase is re-entered.
+                If the base RTT is within the threshold, the server can go back to the previous phase and start sending with the same rate as before entering the RTT Measuring Phase, with the current 
+                messages per RTT reset to the value it had before entering the Sending Phase.
+                </t>
+                </section>
+
+
+              </section>
+              <!-- End of Congestion Control-->
+
+
+              <section anchor="special_cases">
+              <name>Special Cases</name>
+              <t>The main functionalities has been visited in the previous section, however there are still some special cases which need to be considered</t>
+
+                <section>
+                <name>Usage of Nack</name>
+                <t>
+                To improve the efficiency of using the channel, Server send multiple sequence number in 1 NACK in case multiple Yes-packets have been lost.
+                </t>
+                </section>
+
+                <section>
+                <name>File not found</name>
+                <t>
+                Files are identified by file ids in the Yes-packet, the Server sends the rest of the files to maximize every transmission if one doesn't exist.
+                </t>
+                </section>
+
+                <section>
+                <name>Multiple file transmission</name>
+                <t>
+                In case the client wants to request multiple files, it remembers the order in which the file request was included in the file request message and sends it to the server.
+                In case a file was not found the file is N flag is send back by the server with the corresponding file id set. 
+                After the checksum is exchange at the end of a file the client either acks this file with A and C flag set or in the case of a non matching one the client 
+                will send the C flag without the A flag.
+                In this case the file will be put back on the files to retransmitted and send after the other files.
+                If the client does not correctly receive the same file 5 times the client will issue a warning message.
+                </t>
+                </section>
+
+
+
+
+              </section>
+
+
+
+
+
+          </section>
+
+
+
+  </middle>
+
+
+
+</rfc>

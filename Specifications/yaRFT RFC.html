@@ -1,0 +1,271 @@
+<div id="doc" class="markdown-body container-fluid"><h1 id="yarft-rfc">yaRFT RFC</h1><h2 id="1-introduction">1.  Introduction</h2><p>This document describes yaRFT, yet another protocol for reliable file transfer on top of UDP.<br>
+It was primarily designed with the following goals:</p><ul>
+<li>Reliable: The integrity of the final file is ensured.</li>
+<li>Fast: Transmission uses as much bandwidth as possible. The volume<br>
+of transmitted data is minimized.</li>
+<li>Modern: Dynamically allocated memory, non-sequential persistent storage,<br>
+and reduced client upload compared to download rates considered (but<br>
+not assumed).</li>
+<li>Flexible: Broad application because participating parties can react to<br>
+respective constrains.</li>
+<li>Extensible: Future extensions and updates of the protocol are ensured.</li>
+<li>Ease of implementation: Advanced features are not part of the core<br>
+functionality and therefore not strictly required.</li>
+<li>Good User Experience: E.g. Request Multiple file downloads at once</li>
+</ul><h2 id="2-terminology">2.  Terminology</h2><p>The key words “MUST”, “MUST NOT”, “REQUIRED”, “SHALL”, “SHALL NOT”, “SHOULD”,<br>
+“SHOULD NOT”, “RECOMMENDED”, “NOT RECOMMENDED”, “MAY”, and “OPTIONAL” in this<br>
+document are to be interpreted as described in BCP 14<br>
+[<a href="https://datatracker.ietf.org/doc/html/rfc2119" target="_blank" rel="noopener">RFC 2119</a>,<a href="https://datatracker.ietf.org/doc/html/rfc8174" target="_blank" rel="noopener">RFC 8174</a>] when, and only when,<br>
+they appear in all capitals, as shown here.<br>
+The payload and header is called together message.</p><h2 id="3-participant-roles">3.   Participant Roles</h2><p>The participants MUST act as either client or server. The client requests and<br>
+receives files from the server, while the server accepts transmission requests<br>
+and sends the data. One server SHOULD be able to server multiple clients at the<br>
+same time. For each instance of the protocol, there MUST be one client talking<br>
+to one server. The client is expected to know the server’s address or to be able<br>
+to discover the server by some means. This is outside of the scope of this<br>
+protocol.</p><h2 id="4-rft-header-format">4.   RFT Header Format</h2><pre><code> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               |A|N|F|D|S|R|   |                               |
+|   Version     |C|E|I|T|T|E| * |            length             |
+|               |K|W|N|R|C|S|   |                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Connection ID                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                            File                               |
+|                           Offset                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><p><em>Figure 1: Basic Message Header</em></p><p>Version: 8 bits<br>
+<br>  Version used in the current connection instance of the yaRFT protocol <br></p><p>Flags: 8 bits<br>
+<br>  ACK: Acknowlegement Flag<br>
+If the Acknowledgement Flag is set, the File Offset field contains the value of the next File offset number the sender of the message is expecting to receive. Otherwise the File Offset field is set by default to 0.<br>
+This flag is not set for the hello messages in the connection establishment and for the resumption request and answer messages in the file transfer resumption [File Transfer Resumption]<br>
+<br>  NEW: New File Request Flag<br>
+The New File request flag is set if the client wants to make a new file request or the message is a part of the initial handshake messages [Connection Establishment].<br>
+If this flag is not combined with ACK or combined with ACK+FIN flags, File Name would be expected as a payload.<br>
+<br>  FIN: Finished Flag<br>
+The Finished Flag is set when the end of the file is sent or acknowledged.<br>
+<br>  STC: Status code set Flag (optional header field)<br>
+If the STC is set, one Status Code is added to the payload.Its length is included to the Length field.<br>
+<br>  DTR: Data rate Flag<br>
+If the DTR flag is set, the header includes the Data Rate field.<br>
+<br>  RES: Resumption Flag<br>
+The RES bit is set in the resumption handshake messages or a resumption request. If the RES is set, the FileOffset indicates the requested first byte.</p><br><p>Length: 16 bits<br>
+<br>  The length field includes the payload length in bytes. This field does not include the basic message header size. <br><br>
+Connection ID: 32 bits<br>
+<br>  The Connection ID chosen by the server identifying the connection. This field has to be the same in every package pertaining to the same connection after the initial Server Hello.<br><br>
+File Offset: 64 bits<br>
+<br>  The File Offset indicating the next File Offset the sender of the message is expecting to receive beyond the missing ranges.<br></p><h3 id="41-possible-payloads">4.1 Possible Payloads</h3><p>The given possible optional subheader fields are included in the payload’s beginning and are always ordered in the given order if multiple of them included in the payload:<br>
+Data Rate &gt; Status Code &gt; NACK Range &gt; Checksum &gt; File Name</p><p>Some optional subheader payloads SHALL be combined:<br>
+- Checksum + filename<br>
+- NACK Range + Data Rate<br>
+Some optional subheader payloads SHALL NOT be combined with other optional subheader:<br>
+- Status Message</p><h4 id="411-nack-range-variable">4.1.1 NACK Range: variable</h4><pre><code>+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        NACK Range Start                       |  
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        NACK Range End                         | 
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+                                ...
+</code></pre><p>The NACK Range payload consists of a list of NACK Range Pairs that are compose of NACK Range Start and NACK Range End fields.</p><p>NACK Range Start :64 bits<br>
+<br>  This fields indicates the starting byte of the missing range. <br><br>
+NACK Range End :64 bits<br>
+<br>  This fields indicates the ending byte of the missing range. <br></p><p>Transmitting NACK Range payload, the client indicates that listed ranges are missing even though a “more significant” byte was received and is acknowledged.<br>
+This means that the fields in the ranges MUST be smaller than the File Offset field.</p><h4 id="412-checksum-256-bits">4.1.2 Checksum: 256 bits</h4><pre><code>+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |  
+|                        Checksum                               |
+|                                                               | 
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><p><br> The checksum payload MUST be used to transfer the SHA256 checksum over the whole file. <br></p><h4 id="413-file-name--variable">4.1.3 File name : variable</h4><pre><code>+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |  
+|                        File name                              |
+|                                                               | 
+|                           ...                                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><p><br>  File name indicates the name of the file client requests to be transmitted. It does not have a fixed size. Computation of its length SHOULD be done by using the length field.  <br></p><h4 id="414-data-rate-64-bits">4.1.4 Data Rate: 64 bits</h4><p><br>  This optional header field SHOULD be added regularly by the client in it’s packets to inform the server about the rate of data it is able to receive and work.<br>
+If this field is added, the DTR flag MUST be set. <br></p><pre><code>+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           Data Rate                           |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><h4 id="415-status-message-variable">4.1.5 Status Message: variable</h4><pre><code>+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Status Code  |              Status Info(0..x)                |  
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><p>Satus Message is composed of Status Code and Status Info fields. It is not a fixed length. Computation of its length SHOULD be done by using the length field.</p><h4 id="416-status-code-8-bits">4.1.6 Status Code: 8 bits</h4><p><br>  Status Code indicates which Status Messages is sent to the receiver which are explained in detail at [Status Messages] section. <br></p><p>Status Info: variable<br>
+<br>  Additional information MAY be added related to the status.  <br></p><h3 id="42-file-offset">4.2   File Offset</h3><p>The File Offset field serves to identify the section of the file the regarding packet belongs to.<br>
+In data packets sent out by the server this field’s value MUST describe the index of the first octet of the payload in reference to the start of the file (count begins at 0).<br>
+In the client’s acknowledgement packet this field MUST be set to the highest index of an octet in the file received + 1, this value will therefore be equal to the one the server would set in the following packet.<br>
+When the Resumption Flag is set, this field MUST indicate the octet the client wants to receive the file from; all data preceding this point is considered as successfully received by the server.</p><h3 id="43-connection-id">4.3   Connection ID</h3><p>A (currently) unique value for the server to identify a connection with a client.<br>
+This field MUST be 0 in a client’s first connection request during [Connection Establishment] and then be set by the server in it’s initial response.<br>
+The value MUST NOT be in use by any currently active and/or valid connection established with the server and MUST be (pseudo-)randomly generated (e.g. a simple incremental counter is not enough). It MUST NOT be trivially guessable or derivable from any other field of the same header or lower-layer headers.<br>
+This value MUST be set to the same value in every packet pertinent to a connection expect the very first one, and both entities MUST remember this ID until the connection is fully terminated (see [End of Connection]).</p><h2 id="5-communication-flow">5.   Communication Flow</h2><h3 id="51-connection-establishment">5.1 Connection Establishment</h3><p>The connection establishment consists of a three way handshake initiated by the client.</p><h4 id="511-client-hello">5.1.1 Client Hello</h4><p>The Client Hello packet MUST be distinguished by only setting the NEW flag and setting the Connection ID and File Offset to 0.<br>
+This packet is a request to download a file with the file name encoded as a string of (valid) characters in the payload.</p><pre><code> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               | |N| | | | |   |                               |
+|   Version     | |E| | | | |   |            length             |
+|               | |W| | | | |   |                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Connection ID = 0                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           File                                |
+|                          Offset = 0                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         File Name                             |
+|                            ...                                |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><h4 id="512-server-hello">5.1.2 Server Hello</h4><p>After receiving a Client Hello the server MUST send back a Status message or in case of no errors a Server Hello packet.<br>
+The Server Hello packet MUST have only the NEW flag set, have a newly generated Connection ID, a File Offset set to 0 as well a checksum of the requested file located in the payload in a direct binary encoding.<br>
+The Connection ID must follow the format described in [6. Connection ID].<br>
+The algorithm used for the checksum MUST be SHA256.<br>
+This may be changed in future versions.<br>
+This checksum<br>
+MUST be stored client-side and the client SHOULD verify that the whole file was<br>
+transferred correctly.</p><pre><code> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               | |N| | | | |   |                               |
+|   Version     | |E| | | | |   |            length             |
+|               | |W| | | | |   |                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Connection ID = &lt;new&gt;                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           File                                |
+|                          Offset = 0                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Checksum                              |
+|                                                               |
+|                                                               |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><h4 id="513-client-hello-ack">5.1.3 Client Hello ACK</h4><p>Receiving the Server Hello packet the client either MUST send back a Status Message or in case of no errors a Client Hello ACK, acknowledging the established connection.<br>
+The Client Hello ACK MUST have the ACK and NEW flag set and set the length field and file offset field to 0. The Connection ID MUST (from this point forward) be set to the ID that was received from the server in the Server Hello message.</p><pre><code> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               |A|N| | | | |   |                               |
+|   Version     |C|E| | | | |   |         length = 0            |
+|               |K|W| | | | |   |                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Connection ID = &lt;received id&gt;              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           File                                |
+|                          Offset = 0                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><h3 id="52-data-transfer">5.2  Data Transfer</h3><p>After receiving the last handshake message the server SHOULD start transferring data.<br>
+The server sends the following header for each data message:</p><pre><code> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               |A| | | | | |   |                               |
+|   Version     |C| | | | | |   |         length = &lt;payload_len&gt;|
+|               |K| | | | | |   |                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Connection ID = &lt;cid&gt;                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           File                                |
+|                          Offset = &lt;first byte of data&gt;        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           Data                                |
+|                           ...                                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><p>The server MUST set only the ACK flag in the header.<br>
+The length field indicates the length of the data payload in bytes.<br>
+The Connection ID is set to the ID of the client as described in [6. Connection ID].<br>
+Furthermore, the File Offset field MUST be set to the first byte of the file that will be sent within the current message.</p><p>The data packets are acknowledged by the client regularly.<br>
+This MUST occur after a certain amount of received data packets or after a certain amount of time, depending on what comes first.<br>
+A client acknowledgement MUST adhere to the following structure:</p><pre><code> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               |A| | | | | |   |                               |
+|   Version     |C| | | | | |   |         length = &lt;payload_len&gt;|
+|               |K| | | | | |   |                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Connection ID = &lt;cid&gt;                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           File                                |
+|                          Offset = &lt;recv_fo + l&gt;               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       NACK Ranges                             |
+|                           ...                                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</code></pre><h4 id="521-usage-of-nacksacks">5.2.1 Usage of NACKs/ACKs</h4><p>When receiving data messages the client MUST reply with a message including a set ACK flag.<br>
+The File Offset field MUST be set to the index of the last acknowledged byte of the current file.<br>
+A client implementation MAY choose to not support non-acknowledgement windows, in which case the File Offset field should only be set to the index of the highest continuous received byte.<br>
+It is still RECOMMENDED that the client includes a list of NACK ranges indicating continuous ranges of bytes that are still missing from the file but would otherwise be acknowledged by an ACK.<br>
+The NACK payload is specified in more detail at <a href="https://hedgedoc.rbg.tum.de/#nack-range-variable" target="_blank" rel="noopener">Nack Range Variable</a>.</p><p>In case the message size exceeds the MTU size because of too many missing ranges, the client MUST set the file offset to a value that does not exceed omitted missing ranges.</p><h3 id="53-end-of-connection">5.3   End of Connection</h3><p>The server sets the FIN flag on the packet containing the last bytes of a file in transfer.  When the client has received a complete file (everything up to and including the packet containing the FIN flag), it MUST also sets the FIN flag on it’s last acknowledgement packet; as this packet does logically not contain any missing ranges (as the file would not be complete), the length field would be 0 and the payload is available for use for further information.<br>
+Therefore the client may choose to also:</p><ul>
+<li>set an additional NEW flag and request a new file in the payload. This message is similarly to the Client Hello message, except that the value of the FileOffset field is superseeded by the ACK flag and contains the index of the currently acknowledged and finished file rather than being 0; or</li>
+<li>add a Status Code terminating the connection (see [Status Messages])</li>
+</ul><p>in the same message. One of those options MUST be chosen, as other formatted packets would be invalid; however implementations SHOULD terminate the connection if no new file is requested.</p><h4 id="531-terminating-a-connection">5.3.1 Terminating a connection</h4><p>When one entity decides to terminate a connection, it MUST indicate that to the other side by sending a packet with an appropriate Status message indicating so (see [Status Messages]). After sending this message no further packets should be sent with the same Connection ID. Upon receiving such a message, the implementation SHOULD respond with an appropriate acknowledgement of termination, which is the last message sent by this side after which the connection state can be discarded. The original party terminating the connection MAY wait for that acknowledgement, but no guarantee can be given that this message is actually sent or arrives. In any case the connection state may be discarded after the last message was sent / received as indicated in this section and all further incoming packets for the corresponding Connection ID should be dropped. Server implementations SHOULD wait before assigning the same Connection ID to a new connection as delayed or asynchronous traffic may set an implementation into an invalid state.</p><h3 id="54-file-request">5.4   File Request</h3><p>The first File Request is made in the Handshake between client and server. If the first file is not available and the client wants to request another file, the handshake is repeated with the new file. In case the file is not available the server will send the status code and end the connection in case of a Handshake.</p><p>The second file request after the initial handshake has been completed can be made after the previous file has been completed. In this case the client sends a packet with the FIN, ACK and NEW flag set, its old CID and the fileoffset of the file before with the new file name after the header. The server should answer with a status code if the file is not availabe or with a NEW packet containing the checksum and start sending the requested file after this having send the checksum.</p><h3 id="55-connection-drops">5.5   Connection Drops</h3><h4 id="551-client-connection-loss">5.5.1  Client Connection Loss</h4><p>This case occurs when the client connection drops or the client migrates.</p><p>In the case of a Connection Drop, the Client does not change its regular behavior and continues sending its regular ACK messages(with the established ConnectionID) that is sent periodically (every 30 received data message or every 1 s). These ACKs are just regular ACK message that MAY include NACK ranges.</p><p>The periodic sending of ACK messages MUST also stop after a timeout which is set as 1 minute. This timeout can be revised. With this timeout, the client gives up on downloading the file(s).</p><h4 id="552-server-connection-loss">5.5.2  Server Connection Loss</h4><p>This case occurs when server connection drops.</p><p>This is noticed by the client when the sent client messages are replied with ICMP Destination Unreachable message. As long as the client is running, it sends client acknowledgement messages to recover from potential client connection drop. So client always notices the server connection drop.</p><p>Receiving ICMP message results with client’s giving up to download.</p><h4 id="553-file-transfer-resumption">5.5.3  File Transfer Resumption</h4><p>The client has the chance to send File-Resumption request to the server whenever the client wishes to have a resumption request.<br>
+The resumption of the file transfer starts by sending resumption hello message from the client side, the information includes: file name, file offset and checksum for server to authenticate the client connection.<br>
+Then the server send the resumption message back with the new connection id, checked file offset,and checksum. the client will acknowledgement when received the hello message from the server with file offset and connecion ID again . After handshake message the server should continues sending the data packet from the given file offset as the normal data transfer.</p><h5 id="5531-resumption-hand-shake">5.5.3.1 Resumption hand shake</h5><p>Follow communication will be send:</p><ul>
+<li>client send Client-Resumption-Hello-request with (filename, checksum,file offset) to the server</li>
+<li>When the server get the incomming packet, validity will be checked.if the packet is validified, the new connection ID will be generated and sending back Resumption-Server-Hello-Response with(checksum,newly introduced connection id,file offset)</li>
+<li>When the client get the incomming packet, validifed it.If no error occours, the server will send Client-Hello-Ack packet with (newly introduced connection id)</li>
+</ul><h5 id="5532-checksum-mis-match">5.5.3.2 Checksum mis-match</h5><p>After client sending the File-Resumption request. The server will check the checksum which is contained in the client’s request packet.If there’s a mis-match between the server calculated checksum of the current file and the checksum that has been received from the client , the server will send the status code and handle next file request, if there’s no request left server will stop the connection and switch to pending status.</p><h5 id="5533-transfer-flow">5.5.3.3 Transfer flow</h5><p>To utilize the network flow of the system, we resume transferring the file instead of transferring it again. Once the connection is reestablished, the file transfer can be resumed from a previous interruption.</p><h2 id="6-signaling">6.   Signaling</h2><h3 id="61-flow-control">6.1 Flow Control</h3><p>The flow control is based on the data rate the client can handle. The data rate is given by the client in Bytes per second. The client can send a packet with the DTR flag set and MUST then include the data rate in the header following the file offset. The server MUST update its flow control based on the data rate send by the client and limit its sending rate to the the specified bytes per second.</p><h3 id="62-congestion-control">6.2 Congestion Control</h3><p>Since the protocol is transmitted over UDP, it is expected to follow the guidelines of <a href="https://datatracker.ietf.org/doc/html/rfc8085" target="_blank" rel="noopener">RFC 8085</a>. In compliance with RFC 8085 we define here a congestion control mechanism for this protocol.</p><p>The server MUST minimize messages loss and network congestion. It SHOULD determine the current loss rate from the acknowledgement packets received by comparing what messages where send and what messages are not acknowledged. A loss-based congestion control algorithm SHOULD be used to adjust the rate of messages being send. The server MAY constantly probe the message rate tolerated by the network.</p><p>For simple use cases it is RECOMMENDED to use an additive-increase-multiplicative-decrease congestion algorithm.<br>
+The server MAY however try to improve performance by applying more sophisticated algorithms.<br>
+The client MUST NOT expect a specific congestion control algorithm to be used.</p><p>To avoid false not-acknowledgements for out-of-order delivered messages, the client SHOULD not acknowledge the most recently received message, but instead allow a leeway of about one round-trip-time to receive out-of-order messages. It is RECOMMENDED for the client to time the client request and server response messages during connection establishment for an estimate of the round-trip-time</p><h3 id="63-status-messages">6.3  Status Messages</h3><p>Status codes are used to communicate control state between the client and server. The presence of the optional header field <code>status code</code> is indicated by the status code flag. This optional header field MUST NOT be included in the payload length field.</p><p>The following table gives an overview of all known status codes.<br>
+The “Direction” column specifies the expected send direction between server (S) and client (​C).</p><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+<th>Direction</th>
+<th>Behavior Sender/Receiver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Unknown</td>
+<td>S <span class="mathjax"><span class="MathJax_Preview" style="color: inherit;"></span><span class="MathJax" id="MathJax-Element-1-Frame" tabindex="0" style="position: relative;" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mo stretchy=&quot;false&quot;>&amp;#x21D4;</mo></math>" role="presentation"><nobr aria-hidden="true"><span class="math" id="MathJax-Span-1" style="width: 1.282em; display: inline-block;"><span style="display: inline-block; position: relative; width: 0.984em; height: 0px; font-size: 127%;"><span style="position: absolute; clip: rect(1.492em, 1000.95em, 2.338em, -1000em); top: -2.165em; left: 0em;"><span class="mrow" id="MathJax-Span-2"><span class="mo" id="MathJax-Span-3" style="font-family: MathJax_Main;">⇔</span></span><span style="display: inline-block; width: 0px; height: 2.165em;"></span></span></span><span style="display: inline-block; overflow: hidden; vertical-align: -0.094em; border-left: 0px solid; width: 0px; height: 0.825em;"></span></span></nobr><span class="MJX_Assistive_MathML" role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mo stretchy="false">⇔</mo></math></span></span><script type="math/tex" id="MathJax-Element-1">\Leftrightarrow</script></span> C</td>
+<td>Terminate connection (both Sender and Receiver)</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Graceful Connection Termination</td>
+<td>S <span class="mathjax"><span class="MathJax_Preview" style="color: inherit;"></span><span class="MathJax" id="MathJax-Element-2-Frame" tabindex="0" style="position: relative;" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mo stretchy=&quot;false&quot;>&amp;#x21D4;</mo></math>" role="presentation"><nobr aria-hidden="true"><span class="math" id="MathJax-Span-4" style="width: 1.282em; display: inline-block;"><span style="display: inline-block; position: relative; width: 0.984em; height: 0px; font-size: 127%;"><span style="position: absolute; clip: rect(1.492em, 1000.95em, 2.338em, -1000em); top: -2.165em; left: 0em;"><span class="mrow" id="MathJax-Span-5"><span class="mo" id="MathJax-Span-6" style="font-family: MathJax_Main;">⇔</span></span><span style="display: inline-block; width: 0px; height: 2.165em;"></span></span></span><span style="display: inline-block; overflow: hidden; vertical-align: -0.094em; border-left: 0px solid; width: 0px; height: 0.825em;"></span></span></nobr><span class="MJX_Assistive_MathML" role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mo stretchy="false">⇔</mo></math></span></span><script type="math/tex" id="MathJax-Element-2">\Leftrightarrow</script></span> C</td>
+<td>Receiver MUST echo termination; free all resources assigned to the connection (both Sender and Receiver)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>File not available to be served</td>
+<td>S <span class="mathjax"><span class="MathJax_Preview" style="color: inherit;"></span><span class="MathJax" id="MathJax-Element-3-Frame" tabindex="0" style="position: relative;" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mo stretchy=&quot;false&quot;>&amp;#x21D2;</mo></math>" role="presentation"><nobr aria-hidden="true"><span class="math" id="MathJax-Span-7" style="width: 1.282em; display: inline-block;"><span style="display: inline-block; position: relative; width: 0.984em; height: 0px; font-size: 127%;"><span style="position: absolute; clip: rect(1.493em, 1000.93em, 2.337em, -1000em); top: -2.165em; left: 0em;"><span class="mrow" id="MathJax-Span-8"><span class="mo" id="MathJax-Span-9" style="font-family: MathJax_Main;">⇒</span></span><span style="display: inline-block; width: 0px; height: 2.165em;"></span></span></span><span style="display: inline-block; overflow: hidden; vertical-align: -0.093em; border-left: 0px solid; width: 0px; height: 0.822em;"></span></span></nobr><span class="MJX_Assistive_MathML" role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mo stretchy="false">⇒</mo></math></span></span><script type="math/tex" id="MathJax-Element-3">\Rightarrow</script></span> C</td>
+<td>Sender waits for other request; receiver should expect to get the same message when retrying within a bound time</td>
+</tr>
+<tr>
+<td>3</td>
+<td>File changed/checksum mismatch</td>
+<td>S <span class="mathjax"><span class="MathJax_Preview" style="color: inherit;"></span><span class="MathJax" id="MathJax-Element-4-Frame" tabindex="0" style="position: relative;" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mo stretchy=&quot;false&quot;>&amp;#x21D2;</mo></math>" role="presentation"><nobr aria-hidden="true"><span class="math" id="MathJax-Span-10" style="width: 1.282em; display: inline-block;"><span style="display: inline-block; position: relative; width: 0.984em; height: 0px; font-size: 127%;"><span style="position: absolute; clip: rect(1.493em, 1000.93em, 2.337em, -1000em); top: -2.165em; left: 0em;"><span class="mrow" id="MathJax-Span-11"><span class="mo" id="MathJax-Span-12" style="font-family: MathJax_Main;">⇒</span></span><span style="display: inline-block; width: 0px; height: 2.165em;"></span></span></span><span style="display: inline-block; overflow: hidden; vertical-align: -0.093em; border-left: 0px solid; width: 0px; height: 0.822em;"></span></span></nobr><span class="MJX_Assistive_MathML" role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mo stretchy="false">⇒</mo></math></span></span><script type="math/tex" id="MathJax-Element-4">\Rightarrow</script></span> C</td>
+<td>Sender waits for other request; receiver can retry same file from beginning</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Protocol Version mismatch</td>
+<td>S <span class="mathjax"><span class="MathJax_Preview" style="color: inherit;"></span><span class="MathJax" id="MathJax-Element-5-Frame" tabindex="0" style="position: relative;" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mo stretchy=&quot;false&quot;>&amp;#x21D2;</mo></math>" role="presentation"><nobr aria-hidden="true"><span class="math" id="MathJax-Span-13" style="width: 1.282em; display: inline-block;"><span style="display: inline-block; position: relative; width: 0.984em; height: 0px; font-size: 127%;"><span style="position: absolute; clip: rect(1.493em, 1000.93em, 2.337em, -1000em); top: -2.165em; left: 0em;"><span class="mrow" id="MathJax-Span-14"><span class="mo" id="MathJax-Span-15" style="font-family: MathJax_Main;">⇒</span></span><span style="display: inline-block; width: 0px; height: 2.165em;"></span></span></span><span style="display: inline-block; overflow: hidden; vertical-align: -0.093em; border-left: 0px solid; width: 0px; height: 0.822em;"></span></span></nobr><span class="MJX_Assistive_MathML" role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mo stretchy="false">⇒</mo></math></span></span><script type="math/tex" id="MathJax-Element-5">\Rightarrow</script></span> C</td>
+<td>Terminate connection (both Sender and Receiver)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Timeout exceeded</td>
+<td>S <span class="mathjax"><span class="MathJax_Preview" style="color: inherit;"></span><span class="MathJax" id="MathJax-Element-6-Frame" tabindex="0" style="position: relative;" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mo stretchy=&quot;false&quot;>&amp;#x21D4;</mo></math>" role="presentation"><nobr aria-hidden="true"><span class="math" id="MathJax-Span-16" style="width: 1.282em; display: inline-block;"><span style="display: inline-block; position: relative; width: 0.984em; height: 0px; font-size: 127%;"><span style="position: absolute; clip: rect(1.492em, 1000.95em, 2.338em, -1000em); top: -2.165em; left: 0em;"><span class="mrow" id="MathJax-Span-17"><span class="mo" id="MathJax-Span-18" style="font-family: MathJax_Main;">⇔</span></span><span style="display: inline-block; width: 0px; height: 2.165em;"></span></span></span><span style="display: inline-block; overflow: hidden; vertical-align: -0.094em; border-left: 0px solid; width: 0px; height: 0.825em;"></span></span></nobr><span class="MJX_Assistive_MathML" role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mo stretchy="false">⇔</mo></math></span></span><script type="math/tex" id="MathJax-Element-6">\Leftrightarrow</script></span> C</td>
+<td>Terminate connection (both Sender and Receiver)</td>
+</tr>
+</tbody>
+</table><p>In future versions of this protocol the table will be amended to guarantee backwards compatibility of status codes.<br>
+Messages that include a status code MAY have an arbitrary UTF-8 string as payload. It SHOULD be used to enhance debugging and error output for humans. The client and server MAY output that debug message without further modification.<br>
+An example for such a debug message is <code>file outside of server directory</code> with the status code 2 for servers that prevent path traversal file requests.</p><h2 id="7-security-considerations">7.   Security Considerations</h2><h3 id="71-authentication-and-authorization">7.1 Authentication and Authorization</h3><p>It is desired to authenticate as well as authorize a client. This would help especially with preserving confidentiality of the data.<br>
+A very crude method of authentication would be to implement a simple password mechanism. The password could be distributed out-of-band and required to be transmitted in the protocol handshake.<br>
+Our three-way handshake would allow the client to include such authentication<br>
+information for the server to check, as well as authentication information for the server to present to the client.</p><h4 id="711-continuous-authentication-eg-encrypted-noncecookie--gt-replay-safe">7.1.1 Continuous Authentication (e.g. encrypted Nonce/Cookie) -&gt; Replay Safe</h4><p>Connection Migration as descibed above allows an attacker to spoof a victim and redirect server traffic for a connection.<br>
+Combating this, one idea is to implement a changing token for the client that authenticates the client at all times with a freshness guarantee.<br>
+This changing token has to be safe against replay attacks, while still allowing for loss.</p><h3 id="72-replay-safety">7.2 Replay Safety</h3><p>At the current state of the protocol an attacker could monitor the traffic of any participant and replay it even when encryption would be used.<br>
+Mutual continuous authentication would handle such an attack, but other kinds of fresh client identification could work as well.</p><h3 id="73-encryption">7.3 Encryption</h3><p>Encryption would forbid an attacker to sniff the potentially confidential data.<br>
+This could be solved via DH Key Exchange at the Handshake phase so that both peers would have a symmetric key and could encrypt the data traffic.</p><h3 id="74-dos-protection">7.4 DoS Protection</h3><p>This version of the protocol also allows the attacker to initiate a DoS/DDoS attack.<br>
+A possible attack would be to send many Client Hello messages and thereby depleting the server of resources.<br>
+One vulnerable resource would be the available space of possible Connection IDs on the server.<br>
+Another one is memory/storage on the server because the server needs to keep state for every new connection.<br>
+Additionally, because our protocol requires calculating the checksum on new connections on the server side, this can require excessive computation and memory resources for large enough files.</p><p>DoS protection is partially already implemented by having connection timeouts and a three-way-handshake that allows the server to check whether a client really initiated a connection request. Still, there is room for improvement and better reasoning.</p><h4 id="741-rate-limiting">7.4.1 Rate Limiting</h4><p>An approach to prevent such an attack would be to allow a specific IP address, or other identifier, to only send a specific amount of connection requests per some amount of time.</p><h4 id="742-late-allocation-after-3-way-handshake">7.4.2 Late Allocation after 3-Way Handshake</h4><p>Setting state on the server after the client is identified is another technique to prevent a DoS attack.<br>
+It would be possible to look at TCP Syn Cookies and write a similar mechanism for this protocol.</p><h4 id="743-proof-of-work-for-client">7.4.3 Proof of Work for Client</h4><p>Lastly, it would be possible to prevent DoS attacks by requiring the client to input performance into establishing a connection and thereby reduce the amount of connections an attack can generate in a given amount of time.<br>
+A simple, yet effective approach would be to include a random value and hash requirement (e.g. includes 5 zero bytes) in the server hello handshake. The client would then have to find a nonce that, appended to the server random value, satisfies the given hash requirements. The server would even be able to adjust the proof-of-work effort required depending on e.g. the current server load, rate limits per IP-address, or the requested file size.<br>
+The main drawback of that would be that the client resources are wasted, instead of used for something useful, so a good balance has to be found.</p></div>
