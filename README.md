@@ -48,7 +48,7 @@ Besides,we using extra thread for handling the receing buffer as well as sending
 The following diagram shows that client and server 's behavior and the state machine of each side.
 ![overview](resources/StateMachine.png)
 
-## Things we learned 
+## Important factors
 In the projects phase there's some key features that we earned,so everything that we learned will become part of ourknowledge and will be used in the future development: 
 1. socket programming: handle sockets behavior 
 2. protocol syntax and encoding 
