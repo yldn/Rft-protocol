@@ -1,4 +1,4 @@
-![rft-protol](resources/logo.png)
+![rft-protol](https://fontmeme.com/permalink/211206/a9a7b01a370f63c9c9d9e1603250864c.png)
 
 # The Robust File Transfer protocol
 This protocol is designed for file transfer with robust transfer behavior. It supports: 
